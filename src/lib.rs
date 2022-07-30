@@ -1,10 +1,10 @@
 use std::{
     future::Future,
     mem::forget,
-    net::TcpStream,
     sync::Arc,
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
-    thread, io::{Write, Read}, os::unix::prelude::AsRawFd,
+    thread,
+    time::Duration,
 };
 
 #[macro_export]
@@ -20,10 +20,13 @@ macro_rules! syscall {
     }};
 }
 
+pub mod net;
+// pub use net::AsyncTcpStream;
+
 pub struct Runtime;
 
 impl Runtime {
-    pub fn run<F: Future>(&self, mut f: F) {
+    pub fn run<F: Future>(&self, f: F) {
         // create context
         let data = Arc::new(Task);
 
@@ -37,108 +40,19 @@ impl Runtime {
         // pin to heap
         let mut f = Box::pin(f);
 
-        // start reactor
-        let reactor = Reactor::new();
-        reactor.start();
-
         // start executor
         loop {
             let res = f.as_mut().poll(&mut cx);
             if let Poll::Ready(v) = res {
                 break;
             }
+            thread::sleep(Duration::from_secs(1));
         }
     }
 }
 
-struct AsyncTcpStream {
-    stream: TcpStream,
-    epoll_fd: i32,
-}
-
-impl AsyncTcpStream {
-    fn connect(addr: &str) -> TcpStream {
-        let mut stream = TcpStream::connect(addr).unwrap();
-        stream
-    }
-    fn write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error> {
-        self.stream.write(buf)
-    }
-
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
-        let mut event = libc::epoll_event {
-            events: (0i32 | libc::EPOLLIN) as u32,
-            u64: 0xfeedbeef,
-        };
-
-        syscall!(epoll_ctl(
-            self.epoll_fd,
-            libc::EPOLL_CTL_ADD,
-            self.stream.as_raw_fd(),
-            &mut event
-        ))
-        .unwrap();
-    }
-}
-impl Future for AsyncTcpStream {
-    type Output = ();
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        
-    }
-}
-
-struct Reactor {
-    epoll_fd: i32,
-}
-
-impl Reactor {
-    fn new() -> Reactor {
-        let epoll_fd = syscall!(epoll_create(1)).unwrap();
-
-        Reactor { epoll_fd }
-    }
-
-    fn register(&self, token: u64, fd: i32) {
-        let mut event = libc::epoll_event {
-            events: (0i32 | libc::EPOLLIN) as u32,
-            u64: token,
-        };
-
-        syscall!(epoll_ctl(
-            self.epoll_fd,
-            libc::EPOLL_CTL_ADD,
-            fd,
-            &mut event
-        ))
-        .unwrap();
-    }
-
-    fn start(&self) {
-        let mut events: Vec<libc::epoll_event> = Vec::with_capacity(10);
-        let epoll_fd = self.epoll_fd;
-        thread::spawn(move || {
-            // blocking
-            loop {
-                let res =
-                    syscall!(epoll_wait(epoll_fd, events.as_mut_ptr(), 10, 2000)).unwrap() as usize;
-                if res > 0 {
-                    unsafe {
-                        events.set_len(res);
-                    }
-                    for i in 0..res {
-                        let ready_event = events[i];
-                        let event_mask = ready_event.events;
-                        let token = ready_event.u64;
-                        println!("event mask: {}, token: {:#x}", event_mask, token);
-                    }
-                } else {
-                    println!("timeout, return {}", res);
-                    break;
-                }
-            }
-        });
-    }
-}
+struct Executor;
+struct Task;
 
 fn clone_rw(p: *const ()) -> RawWaker {
     let data: Arc<Task> = unsafe { Arc::from_raw(p as *const Task) };
@@ -171,6 +85,3 @@ fn drop_rw(p: *const ()) {
     unsafe { Arc::from_raw(p as *const Task) };
     // decrement reference count by auto drop
 }
-
-struct Executor;
-struct Task;

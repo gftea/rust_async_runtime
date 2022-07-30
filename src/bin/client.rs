@@ -1,5 +1,5 @@
 
-use std::{net::TcpStream, io::{Write, Read}, thread, time::Duration};
+use std::{net::TcpStream, io::{Write, Read}};
 
 fn test_delay_server() {
     let mut stream = TcpStream::connect("127.0.0.1:8080").unwrap();

@@ -4,8 +4,6 @@ use std::os::unix::prelude::*;
 use std::{
     io::{Read, Write},
     net::TcpStream,
-    thread,
-    time::Duration,
 };
 
 #[test]

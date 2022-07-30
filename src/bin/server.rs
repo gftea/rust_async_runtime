@@ -1,13 +1,14 @@
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    thread, time::Duration,
+    thread,
+    time::Duration,
 };
 
 fn handle_stream(mut stream: TcpStream) {
     let mut buf = vec![0; 1500];
 
-    let handle = thread::spawn(move || {
+    thread::spawn(move || {
         loop {
             let num_of_bytes = stream.read(&mut buf).unwrap();
             // EOF of stream, client shutdown
@@ -19,10 +20,7 @@ fn handle_stream(mut stream: TcpStream) {
             println!("thread {thread_id:?} number of bytes received: {num_of_bytes}, contents: {contents}");
             // write response
             thread::sleep(Duration::from_secs(1));
-            stream.write(b"OK").unwrap();
-            // thread::sleep(Duration::from_secs(1));
-            // stream.write(b"OK").unwrap();
-
+            stream.write(b"Hello!").unwrap();
         }
 
         println!("client shutdown");
