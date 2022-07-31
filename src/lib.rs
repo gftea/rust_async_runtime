@@ -21,14 +21,13 @@ use std::{
 // }
 
 pub mod net;
-// pub use net::AsyncTcpStream;
 
 pub struct Runtime;
 
 impl Runtime {
     pub fn run<F: Future>(&self, f: F) {
         // create context
-        let data = Arc::new(Task);
+        let data = Arc::new(Resource);
 
         let waker = RawWaker::new(
             Arc::into_raw(data) as *const (),
@@ -51,10 +50,10 @@ impl Runtime {
         }
     }
 }
-struct Task;
+struct Resource;
 
 fn clone_rw(p: *const ()) -> RawWaker {
-    let data: Arc<Task> = unsafe { Arc::from_raw(p as *const Task) };
+    let data: Arc<Resource> = unsafe { Arc::from_raw(p as *const Resource) };
 
     // make sure increment reference count of the underlying source
     // clone increment ref count, into_raw consume the cloned and escape drop
@@ -71,17 +70,17 @@ fn clone_rw(p: *const ()) -> RawWaker {
 }
 
 fn wake_rw(p: *const ()) {
-    let data: Arc<Task> = unsafe { Arc::from_raw(p as *const Task) };
+    let data: Arc<Resource> = unsafe { Arc::from_raw(p as *const Resource) };
     // todo wakeup, and clean resource 
 }
 
 fn wake_by_ref_rw(p: *const ()) {
-    let data: Arc<Task> = unsafe { Arc::from_raw(p as *const Task) };
+    let data: Arc<Resource> = unsafe { Arc::from_raw(p as *const Resource) };
     // todo wakeup
     forget(data);
 }
 
 fn drop_rw(p: *const ()) {
-    unsafe { Arc::from_raw(p as *const Task) };
+    unsafe { Arc::from_raw(p as *const Resource) };
     // decrement reference count by auto drop
 }
