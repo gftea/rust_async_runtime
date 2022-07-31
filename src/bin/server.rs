@@ -9,6 +9,9 @@ fn handle_stream(mut stream: TcpStream) {
     let mut buf = vec![0; 1500];
 
     thread::spawn(move || {
+        // write response
+        thread::sleep(Duration::from_secs(2));
+        stream.write(b"Hello!").unwrap();
         loop {
             let num_of_bytes = stream.read(&mut buf).unwrap();
             // EOF of stream, client shutdown
@@ -18,9 +21,6 @@ fn handle_stream(mut stream: TcpStream) {
             let thread_id = thread::current().id();
             let contents = std::str::from_utf8(&buf[..num_of_bytes]).unwrap();
             println!("thread {thread_id:?} number of bytes received: {num_of_bytes}, contents: {contents}");
-            // write response
-            thread::sleep(Duration::from_secs(1));
-            stream.write(b"Hello!").unwrap();
         }
 
         println!("client shutdown");

@@ -7,18 +7,18 @@ use std::{
     time::Duration,
 };
 
-#[macro_export]
-#[allow(unused_macros)]
-macro_rules! syscall {
-    ($fn: ident ( $($arg: expr),* $(,)* ) ) => {{
-        let res = unsafe { libc::$fn($($arg, )*) };
-        if res == -1 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(res)
-        }
-    }};
-}
+// #[macro_export]
+// #[allow(unused_macros)]
+// macro_rules! syscall {
+//     ($fn: ident ( $($arg: expr),* $(,)* ) ) => {{
+//         let res = unsafe { libc::$fn($($arg, )*) };
+//         if res == -1 {
+//             Err(std::io::Error::last_os_error())
+//         } else {
+//             Ok(res)
+//         }
+//     }};
+// }
 
 pub mod net;
 // pub use net::AsyncTcpStream;
@@ -46,12 +46,11 @@ impl Runtime {
             if let Poll::Ready(v) = res {
                 break;
             }
+            println!("top future pending, poll next");
             thread::sleep(Duration::from_secs(1));
         }
     }
 }
-
-struct Executor;
 struct Task;
 
 fn clone_rw(p: *const ()) -> RawWaker {
@@ -66,13 +65,14 @@ fn clone_rw(p: *const ()) -> RawWaker {
     // new RawWaker with data pointer to same resource
     RawWaker::new(
         p as *const (),
+        // the `RawWakerVTable::new` is a magic `const` function can create a object with 'static lifetime
         &RawWakerVTable::new(clone_rw, wake_rw, wake_by_ref_rw, drop_rw),
     )
 }
 
 fn wake_rw(p: *const ()) {
     let data: Arc<Task> = unsafe { Arc::from_raw(p as *const Task) };
-    // todo wakeup
+    // todo wakeup, and clean resource 
 }
 
 fn wake_by_ref_rw(p: *const ()) {
