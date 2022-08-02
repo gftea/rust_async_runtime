@@ -3,8 +3,13 @@ use std::{
     io::{self, Read, Write},
     net::{Shutdown, TcpStream},
     pin::Pin,
-    task::{Context, Poll},
+    task::{Context, Poll, Waker}, os::unix::prelude::AsRawFd, cell::RefCell, thread,
 };
+
+use crate::reactor;
+
+
+
 /// just to wrap a TcpStream in order to implement  different interfaces
 /// User can use this type like below
 /// ```
@@ -24,6 +29,7 @@ impl AsyncTcpStream {
         let stream = TcpStream::connect(addr).unwrap();
         // set to nonblocking so that we can control based on return status
         stream.set_nonblocking(true).unwrap();
+
         Self { stream }
     }
     pub fn close(&self) {
@@ -42,16 +48,28 @@ impl AsyncTcpStream {
 pub struct ReadFuture<'a, 'b> {
     stream: &'a TcpStream,
     buf: &'b mut [u8],
+
 }
+
 
 impl<'a, 'b> Future for ReadFuture<'a, 'b> {
     type Output = usize;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let tid = thread::current().id();
+        println!("poll thread {tid:?}");
         let f = self.get_mut();
         match f.stream.read(&mut f.buf) {
             Ok(n_bytes) => Poll::Ready(n_bytes),
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
-            Err(e) => panic!("Future read error! {e:?}"),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                //  register event to reactor
+                let reactor = reactor::epoll::get_reactor().unwrap();
+                let p = cx.waker() as *const Waker as u64;
+                println!("registeration token: {p:#x}");
+                reactor.register(f.stream.as_raw_fd(), libc::EPOLLIN | libc::EPOLLONESHOT , p);
+            
+                Poll::Pending
+            }
+            Err(e) => panic!("ReadFuture: TCP stream read error! {e:?}"),
         }
     }
 }
