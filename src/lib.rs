@@ -1,22 +1,14 @@
 use std::{
-    cell::RefCell,
-    collections::HashMap,
     future::Future,
     mem::forget,
     pin::Pin,
-    process::Output,
     sync::{mpsc, Arc, Mutex},
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
-    thread,
-    time::Duration,
 };
 
-// export net
+// export 
 pub mod net;
-
-// for start reactor
-mod reactor;
-use reactor::epoll::Reactor;
+pub mod reactor;
 
 #[macro_export]
 #[allow(unused_macros)]
@@ -35,20 +27,21 @@ pub struct Runtime;
 
 impl Runtime {
     pub fn run<F: Future<Output = ()> + Send + 'static>(&self, f: F) {
-        let (sender, receiver) = mpsc::channel();
-        let f = Box::pin(f);
+        // --- spawn reactor and set reactor's context to current thread ---
+        reactor::enter();
 
+        // channel as task queue:
+        // Executor holds receiver, Waker holds the sender for sending Task
+        let (sender, receiver) = mpsc::channel();
+
+        let f = Box::pin(f);
+        // Task need to be shared by across threads, but it holds same top future
         let task = Arc::new(Task {
             fut: Mutex::new(Some(f)),
         });
-
-        // hold the reactor
-        let reactor = Reactor::new();
-        // enter context
-        reactor::epoll::enter(reactor);
-
-        
-        // create context
+        // --- create context for future ---
+        // data for Waker will have both channel sender and the task
+        // so that in `wake` call, we can send the task back to Executor for polling
         let data = Arc::new(Resource {
             sender: sender.clone(),
             task: task.clone(),
@@ -59,32 +52,39 @@ impl Runtime {
         );
         let waker = unsafe { Waker::from_raw(rawwaker) };
         let mut cx = Context::from_waker(&waker);
-        let p = &waker as *const Waker as usize;
-        println!("waker address : {p:#x}");
-        // start executor
-        // trigger first poll
+
+        // --- Start Executor ---
+        // for start first poll
         sender.send(task.clone()).unwrap();
 
         loop {
+            // when receiver returns, it means the task is ready to advance further
             let t = receiver.recv().unwrap();
 
-            // handle ready task
-            // make sure we exit with the future stored back
+            // Need  mutex because we share the same underlying future across task references
+            // We need to take the future out as mutable for calling `poll`, then
+            // make sure the future stored back before exiting mutex guard
             let mut mtx = t.fut.lock().unwrap();
             // take the future out
             let mut f = mtx.take().unwrap();
+
+            // Poll the future, note that we do not recreate the Waker and context here
+            // because
+            // 1. it is OK in our example because we only handle one Task and same underlying top future.
+            // 2. we use the Waker's address as data for registering event, so should be kept until future completes
+            //
+            // Next step: to schedule multiple different tasks.
+            // Need to recreate Waker and Context according to received Task, because of this,
+            // if same Task is scheduled mulitple times, the context passed to underlying future will be different instances
+            // so the address of Waker will not be unique, we can't use it as data for registering event
             let res = f.as_mut().poll(&mut cx);
             if let Poll::Ready(v) = res {
                 break;
             }
             // store the future back
             *mtx = Some(f);
-            // wake the task again in another thread
-            // thread::spawn(move || {
-            //     waker.wake();
-            // });
-            println!("top future pending, poll next");
-            // thread::sleep(Duration::from_secs(1));
+
+            println!("Task is pending, waiting for next task.");
         }
     }
 }
@@ -117,21 +117,20 @@ fn wake_rw(p: *const ()) {
     let data: Arc<Resource> = unsafe { Arc::from_raw(p as *const Resource) };
     // this can be called from another thread
     let mtx = data.task.fut.lock().unwrap();
-
+    // sending task to executor
     data.sender.send(data.task.clone()).unwrap();
 }
 
 fn wake_by_ref_rw(p: *const ()) {
     let data: Arc<Resource> = unsafe { Arc::from_raw(p as *const Resource) };
 
-    // todo wakeup
+    // this can be called from another thread
     {
         let _mtx = data.task.fut.lock().unwrap();
-        // add to run queue
+        // sending task to executor
         data.sender.send(data.task.clone()).unwrap();
     }
     forget(data);
-    //
 }
 
 fn drop_rw(p: *const ()) {

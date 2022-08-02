@@ -1,14 +1,14 @@
 use std::{
     future::Future,
-    io::{self, Read, Write},
+    io::{self, Read},
     net::{Shutdown, TcpStream},
+    os::unix::prelude::AsRawFd,
     pin::Pin,
-    task::{Context, Poll, Waker}, os::unix::prelude::AsRawFd, cell::RefCell, thread,
+    task::{Context, Poll, Waker},
+    thread,
 };
 
 use crate::reactor;
-
-
 
 /// just to wrap a TcpStream in order to implement  different interfaces
 /// User can use this type like below
@@ -48,28 +48,35 @@ impl AsyncTcpStream {
 pub struct ReadFuture<'a, 'b> {
     stream: &'a TcpStream,
     buf: &'b mut [u8],
-
 }
-
 
 impl<'a, 'b> Future for ReadFuture<'a, 'b> {
     type Output = usize;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let tid = thread::current().id();
-        println!("poll thread {tid:?}");
+        println!(
+            "polling future in {:?} | {}:{} |",
+            thread::current().id(),
+            file!(),
+            line!(),
+        );
+
         let f = self.get_mut();
         match f.stream.read(&mut f.buf) {
             Ok(n_bytes) => Poll::Ready(n_bytes),
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                //  register event to reactor
-                let reactor = reactor::epoll::get_reactor().unwrap();
+                // register event to reactor
+                let reg = reactor::get_registery().unwrap();
                 let p = cx.waker() as *const Waker as u64;
-                println!("registeration token: {p:#x}");
-                reactor.register(f.stream.as_raw_fd(), libc::EPOLLIN | libc::EPOLLONESHOT , p);
-            
+                println!(
+                    "register event with Waker's address as data: {p:#x} in {:?} | {}:{} |",
+                    thread::current().id(),
+                    file!(),
+                    line!(),
+                );
+                reg.register(f.stream.as_raw_fd(), libc::EPOLLIN | libc::EPOLLONESHOT, p);
                 Poll::Pending
             }
-            Err(e) => panic!("ReadFuture: TCP stream read error! {e:?}"),
+            Err(e) => panic!("TCP stream read error! {e:?}"),
         }
     }
 }
