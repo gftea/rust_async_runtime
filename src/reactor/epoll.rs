@@ -39,7 +39,6 @@ pub fn get_registery() -> Option<Registry> {
 
 #[derive(Copy, Clone)]
 pub struct Reactor {
-    epoll: i32,
 }
 
 /// We only need epoll id in order to register event to the correct Reactor
@@ -47,6 +46,7 @@ pub struct Reactor {
 pub struct Registry {
     epoll: i32,
 }
+
 impl Reactor {
     fn spawn() -> Registry {
         let epoll = syscall!(epoll_create(1)).unwrap();

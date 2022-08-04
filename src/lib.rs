@@ -6,7 +6,7 @@ use std::{
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
 
-// export 
+// export
 pub mod net;
 pub mod reactor;
 
@@ -23,10 +23,11 @@ macro_rules! syscall {
     }};
 }
 
-pub struct Runtime;
+type TopFuture = Pin<Box<dyn Future<Output = ()>>>;
+pub struct Runtime {}
 
 impl Runtime {
-    pub fn run<F: Future<Output = ()> + Send + 'static>(&self, f: F) {
+    pub fn run(&self, mut futures: Vec<Box<dyn Future<Output = ()> + Send + 'static>>) {
         // --- spawn reactor and set reactor's context to current thread ---
         reactor::enter();
 
@@ -34,32 +35,34 @@ impl Runtime {
         // Executor holds receiver, Waker holds the sender for sending Task
         let (sender, receiver) = mpsc::channel();
 
-        let f = Box::pin(f);
-        // Task need to be shared by across threads, but it holds same top future
-        let task = Arc::new(Task {
-            fut: Mutex::new(Some(f)),
-        });
-        // --- create context for future ---
-        // data for Waker will have both channel sender and the task
-        // so that in `wake` call, we can send the task back to Executor for polling
-        let data = Arc::new(Resource {
-            sender: sender.clone(),
-            task: task.clone(),
-        });
-        let rawwaker = RawWaker::new(
-            Arc::into_raw(data) as *const (),
-            &RawWakerVTable::new(clone_rw, wake_rw, wake_by_ref_rw, drop_rw),
-        );
-        let waker = unsafe { Waker::from_raw(rawwaker) };
-        let mut cx = Context::from_waker(&waker);
+        for i in 0..futures.len() {            
+            let f = unsafe {Pin::new_unchecked(futures.pop().unwrap())};
+            let task = Arc::new(Task {
+                fut: Mutex::new(Some(f)),
+                id: i,
+            });
+            // to trigger first poll
+            sender.send(task).unwrap();
+        }
 
         // --- Start Executor ---
-        // for start first poll
-        sender.send(task.clone()).unwrap();
-
         loop {
             // when receiver returns, it means the task is ready to advance further
             let t = receiver.recv().unwrap();
+            // --- create context for future ---
+            // data for Waker will have both channel sender and the task
+            // so that in `wake` call, we can send the task back to Executor for polling
+            // Data has to be Arc so that as long as at least one waker exist, the data will be alive, so that the task and sender
+            let data = Arc::new(Resource {
+                sender: sender.clone(),
+                task: t.clone(),
+            });
+            let rawwaker = RawWaker::new(
+                Arc::into_raw(data) as *const (),
+                &RawWakerVTable::new(clone_rw, wake_rw, wake_by_ref_rw, drop_rw),
+            );
+            let waker = unsafe { Waker::from_raw(rawwaker) };
+            let mut cx = Context::from_waker(&waker);
 
             // Need  mutex because we share the same underlying future across task references
             // We need to take the future out as mutable for calling `poll`, then
@@ -78,13 +81,16 @@ impl Runtime {
             // if same Task is scheduled mulitple times, the context passed to underlying future will be different instances
             // so the address of Waker will not be unique, we can't use it as data for registering event
             let res = f.as_mut().poll(&mut cx);
-            if let Poll::Ready(v) = res {
-                break;
+            if let Poll::Ready(_) = res {
+                println!("Task {} completed", t.id);
+                continue;
+            } else {
+                // store the future back
+                *mtx = Some(f);
+                println!("Task {} is pending, waiting for next task.", t.id);
             }
-            // store the future back
-            *mtx = Some(f);
 
-            println!("Task is pending, waiting for next task.");
+            
         }
     }
 }
@@ -93,7 +99,8 @@ struct Resource {
     task: Arc<Task>,
 }
 struct Task {
-    fut: Mutex<Option<Pin<Box<dyn Future<Output = ()>>>>>,
+    fut: Mutex<Option<TopFuture>>,
+    id: usize,
 }
 
 fn clone_rw(p: *const ()) -> RawWaker {
@@ -116,7 +123,7 @@ fn clone_rw(p: *const ()) -> RawWaker {
 fn wake_rw(p: *const ()) {
     let data: Arc<Resource> = unsafe { Arc::from_raw(p as *const Resource) };
     // this can be called from another thread
-    let mtx = data.task.fut.lock().unwrap();
+    let _mtx = data.task.fut.lock().unwrap();
     // sending task to executor
     data.sender.send(data.task.clone()).unwrap();
 }

@@ -41,6 +41,7 @@ impl AsyncTcpStream {
         ReadFuture {
             stream: &self.stream,
             buf,
+            waker: None,
         }
     }
 }
@@ -48,6 +49,15 @@ impl AsyncTcpStream {
 pub struct ReadFuture<'a, 'b> {
     stream: &'a TcpStream,
     buf: &'b mut [u8],
+    // to hold latest waker until future drop. 
+    // because Waker has very low memory footprint (16bytes), it is cheap to clone
+    waker: Option<Waker>,
+}
+
+impl<'a, 'b> ReadFuture<'a, 'b> {
+    fn set_waker(&mut self, w: Waker) {
+        self.waker.replace(w);
+    }
 }
 
 impl<'a, 'b> Future for ReadFuture<'a, 'b> {
@@ -64,15 +74,22 @@ impl<'a, 'b> Future for ReadFuture<'a, 'b> {
         match f.stream.read(&mut f.buf) {
             Ok(n_bytes) => Poll::Ready(n_bytes),
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                // register event to reactor
+                // get reactor's registry
                 let reg = reactor::get_registery().unwrap();
-                let p = cx.waker() as *const Waker as u64;
+
+                // the waker referenced by `cx` may be destroyed after poll, so we need to clone it
+                let waker = cx.waker().clone();
+                f.set_waker(waker);
+                // take the waker address in Option
+                let p = f.waker.as_ref().unwrap() as *const Waker as u64;
+                
                 println!(
-                    "register event with Waker's address as data: {p:#x} in {:?} | {}:{} |",
+                    "register event with Waker's address : {p:#x} in {:?} | {}:{} |",
                     thread::current().id(),
                     file!(),
                     line!(),
                 );
+                // register event to reactor
                 reg.register(f.stream.as_raw_fd(), libc::EPOLLIN | libc::EPOLLONESHOT, p);
                 Poll::Pending
             }
