@@ -2,14 +2,15 @@ use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     thread,
-    time::Duration,
+    time::Duration, os::unix::prelude::AsRawFd,
 };
 
 fn handle_stream(mut stream: TcpStream) {
     let mut buf = vec![0; 1500];
-
+    
     thread::spawn(move || {
         // feed client data after a delay
+        let id = stream.as_raw_fd();
         thread::sleep(Duration::from_secs(2));
         stream.write(b"Hello!").unwrap();
 
@@ -26,7 +27,7 @@ fn handle_stream(mut stream: TcpStream) {
             stream.write(b"I got your message!").unwrap();
         }
 
-        println!("client shutdown");
+        println!("client {} shutdown", id);
     });
 }
 
